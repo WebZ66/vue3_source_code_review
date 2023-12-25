@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Document</title>
+    </head>
+    <body>
+        <script>
+            let obj = {
+                a: 1,
+                b: 2,
+            }
+            let _obj1 = new Proxy(obj, {
+                get(target, key) {
+                    console.log('第一次get调用')
+                    //track
+                    return target[key]
+                },
+                set(target, key, value) {
+                    console.log('第一次set调用')
+
+                    target[key] = {
+                        value: value,
+                    }
+                    //trigger
+                },
+            })
+            console.log(_obj1.a)
+            let _obj2 = new Proxy(_obj1, {
+                get(target, key) {
+                    console.log('第二次get调用')
+                    return target[key].value
+                },
+                set(target, key, value) {
+                    console.log('第二次set调用')
+                    target[key] = value
+                },
+            })
+            _obj2.a = 1111
+            console.log(_obj2.a)
+        </script>
+    </body>
+</html>

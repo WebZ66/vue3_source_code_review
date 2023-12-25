@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Document</title>
+    </head>
+    <body>
+        <script>
+            /*
+            思路：如果一个数据被副作用函数读取了，那么当该数据被修改时，我们希望副作用函数能重新执行。
+            这时候就需要对对象属性进行拦截。
+
+            effect函数作用：用来定义副作用函数，接收一个副作用函数作为参数，注册副作用。
+            */
+
+            let bucket = new Set()
+            const data = {
+                text: 'hello vue3',
+            }
+
+            const obj = new Proxy(data, {
+                get(target, key) {
+                    console.log('get方法被调用')
+                    bucket.add(effect)
+                    return target[key]
+                },
+                set(target, key, newValue) {
+                    console.log('set方法被调用')
+                    // 在这里可以添加额外的逻辑
+                    target[key] = newValue
+                    // 执行 bucket 中的 effect 函数
+                    bucket.forEach((effect) => effect())
+                    return true
+                },
+            })
+            function effect() {
+                document.body.innerText = obj.text
+            }
+            effect()
+            setTimeout(() => {
+                obj.text = '1'
+            }, 2000)
+        </script>
+    </body>
+</html>

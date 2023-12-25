@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Document</title>
+    </head>
+    <body>
+        <script>
+            let bucket = new WeakMap()
+            const data = {
+                text: 'hello vue3',
+            }
+
+            const obj = new Proxy(data, {
+                get(target, key) {
+                    console.log('get方法被调用')
+                    //每读取一次,就进行一次依赖收集，即收集一次副作用函数
+                    track(target, key)
+                    return target[key]
+                },
+                set(target, key, newValue) {
+                    console.log('set方法被调用')
+                    target[key] = newValue
+                    trigger(target, key)
+                    return true
+                },
+            })
+
+            //把effect转为用来注册副作用函数的函数
+            let activeEffect = null
+            function effect(fn) {
+                activeEffect = fn
+                fn()
+            }
+            effect(() => (document.body.innerText = obj.text))
+
+            //将activeEffect添入set中
+            function track(target, key) {
+                if (!activeEffect) return //depsMap   target:map     map中  key:set
+                let depsMap = bucket.get(target)
+                if (!depsMap) {
+                    bucket.set(target, (depsMap = new Map()))
+                }
+                let deps = depsMap.get(key)
+                if (!deps) {
+                    depsMap.set(key, (deps = new Set()))
+                }
+                deps.add(activeEffect)
+            }
+            //取出set并循环执行
+            function trigger(target, key) {
+                const depsMap = bucket.get(target)
+                if (!depsMap) return
+                const effects = depsMap.get(key)
+                effects && effects.forEach((effect) => effect())
+            }
+            setTimeout(() => {
+                obj.text = 'hello react'
+            }, 1000)
+        </script>
+    </body>
+</html>
