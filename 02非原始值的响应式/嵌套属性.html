@@ -68,7 +68,7 @@
                 if (!depsMap) return
                 const effects = depsMap.get(key)
                 effects && effects.forEach((effect) => effect())
-            }
+            }   
             setTimeout(() => {
                 _data.text = 'hello react'
             }, 1000)

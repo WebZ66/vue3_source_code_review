@@ -321,3 +321,202 @@ let data={
 data.son.a=123  //这样是无法触发对应的set
 ```
 
+因此需要递归对象，为其子对象进行代理。
+
+
+
+# computed源码解读
+
+> vue源码中通过effect函数注册副作用，在其options中如果添加了lazy:true,则不立即执行副作用函数。而是将副作用函数返回
+
+```ts
+export function effect<T = any>(
+  fn: () => T,
+  options?: ReactiveEffectOptions
+): ReactiveEffectRunner {
+  
+  // 省略部分代码
+  
+  // 只有非 lazy 的时，才执行副作用函数
+  if (!options || !options.lazy) {
+    _effect.run()
+  }
+  const runner = _effect.run.bind(_effect) as ReactiveEffectRunner
+  runner.effect = _effect
+  // 将副作用函数作为返回值返回
+  return runner
+}
+```
+
+`computed` **本质上就是一个懒加载的副作用函数，在effect函数中通过lazy进行控制，实现懒执行。**
+
+****
+
+
+
+## computed函数调用签名
+
+```js
+// packages/reactivity/src/computed.ts
+
+// 只读的
+export function computed<T>(
+  getter: ComputedGetter<T>,
+  debugOptions?: DebuggerOptions
+): ComputedRef<T>
+// 可写的 
+export function computed<T>(
+  options: WritableComputedOptions<T>,
+  debugOptions?: DebuggerOptions
+): WritableComputedRef<T>
+export function computed<T>(
+  getterOrOptions: ComputedGetter<T> | WritableComputedOptions<T>,
+  debugOptions?: DebuggerOptions,
+  isSSR = false
+)
+```
+
+- 第一种情况，computed接收一个`getter`作为参数，返回一个`不可修改`的响应式  `ref`对象
+
+  ```js
+  const count = ref(1)
+  // computed 接受一个 getter 函数
+  const plusOne = computed(() => count.value + 1)
+  
+  console.log(plusOne.value) // 2
+  
+  plusOne.value++ // 错误
+  
+  ```
+
+- 第二种情况，接收一个具有 `set`和 `get`的options对象，返回一个`可修改`的响应式`ref`对象
+
+  ```js
+  const count = ref(1)
+  const plusOne = computed({
+    // computed 函数接受一个具有 get 和 set 函数的 options 对象
+    get: () => count.value + 1,
+    set: val => {
+      count.value = val - 1
+    }
+  })
+  
+  plusOne.value = 1
+  console.log(count.value) // 0
+  
+  ```
+
+
+
+## 实现原理
+
+- 在第一种情况下，它会判断传入的第一个参数是否是函数，如果是函数，赋值给定义好的getter，同时，`setter`赋值为`不进行任何操作 NOOP`
+
+  ```ts
+   // 判断 getterOrOptions 参数 是否是一个函数
+    const onlyGetter = isFunction(getterOrOptions)
+    if (onlyGetter) {
+      // getterOrOptions 是一个函数，则将函数赋值给取值函数getter 
+      getter = getterOrOptions
+      setter = __DEV__
+        ? () => {
+          	//dev环境下 setter为提示，prod环境下不进行操作
+            console.warn('Write operation failed: computed value is readonly')
+          }
+        : NOOP
+    } else {
+      // getterOrOptions 是一个 options 选项对象，分别取 get/set 赋值给取值函数getter和赋值函数setter
+      getter = getterOrOptions.get
+      setter = getterOrOptions.set
+    }
+  
+  ```
+
+- 第二种情况下，传入options对象，就将传入的get和set函数分别赋值给setter和getter
+
+  ```ts
+      // getterOrOptions 是一个 options 选项对象，分别取 get/set 赋值给取值函数getter和赋值函数setter
+      getter = getterOrOptions.get
+      setter = getterOrOptions.set
+  ```
+
+- 处理完setter和getter后，会通过 `ComputedRefImpl`类，创建出一个`ref对象`并返回
+
+  ```ts
+   // 实例化一个 computed 实例
+    const cRef = new ComputedRefImpl(getter, setter, onlyGetter || !setter, isSSR)
+  
+    if (__DEV__ && debugOptions && !isSSR) {
+      cRef.effect.onTrack = debugOptions.onTrack
+      cRef.effect.onTrigger = debugOptions.onTrigger
+    }
+  
+    return cRef as any
+  
+  ```
+
+
+
+## ComputedRefImpl类的实现
+
+> 因为computed最后会返回一个 `ComputedRefImpl`类的实例( 即 `ref`响应式变量 )，如果读取了value属性，就会触发 `get value()`。在该方法中手动调用`trackRefValue`，添加依赖。`ComputedRefImpl`内部用 `_value`来缓存上一次的值， `_dirty`标识是否需要重新计算值，`如果为true，则需要重新计算`，如果false。直接返回 `_value`即实现懒加载。当计算属性依赖的响应式数据变更时，手动触发 `triggerRefValue`，触发响应式
+
+```ts
+// packages/reactivity/src/computed.ts
+
+export class ComputedRefImpl<T> {
+  public dep?: Dep = undefined
+
+  // value 用来缓存上一次计算的值
+  private _value!: T
+  public readonly effect: ReactiveEffect<T>
+
+  public readonly __v_isRef = true
+  public readonly [ReactiveFlags.IS_READONLY]: boolean
+
+  // dirty标志，用来表示是否需要重新计算值，为 true 则意味着具有副作用，需要重新计算
+  public _dirty = true
+  public _cacheable: boolean
+
+  constructor(
+    getter: ComputedGetter<T>,
+    private readonly _setter: ComputedSetter<T>,
+    isReadonly: boolean,
+    isSSR: boolean
+  ) {
+    this.effect = new ReactiveEffect(getter, () => {
+      // getter的时候，不派发通知
+      if (!this._dirty) {
+        this._dirty = true
+        // 当计算属性依赖响应式数据变化时，手动调用 triggerRefValue 函数 触发响应式
+        triggerRefValue(this)
+      }
+    })
+    this.effect.computed = this
+    this.effect.active = this._cacheable = !isSSR
+    this[ReactiveFlags.IS_READONLY] = isReadonly
+  }
+
+  get value() {
+    // the computed ref may get wrapped by other proxies e.g. readonly() #3376
+    // 获取原始对象
+    const self = toRaw(this)
+    // 当读取 value 时，手动调用 trackRefValue 函数进行追踪  track需要传入一个对象，然后会将activeEffect推入到对应的set中等待触发
+    trackRefValue(self)
+    // 只有副作用才计算值，并将得到的值缓存到value中
+    if (self._dirty || !self._cacheable) {
+      // 将dirty设置为 false， 下一次访问直接使用缓存的 value 中的值
+      self._dirty = false
+      self._value = self.effect.run()!
+    }
+    // 返回最新的值
+    return self._value
+  }
+
+  set value(newValue: T) {
+    this._setter(newValue)
+  }
+}
+
+```
+
